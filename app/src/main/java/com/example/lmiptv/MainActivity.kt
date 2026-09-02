@@ -129,7 +129,7 @@ class MainActivity:ComponentActivity(){
   fun showInfo(item:IptvItem){if(item.kind=="LIVE")return;infoLoading=true;scope.launch{mediaDetails=withContext(Dispatchers.IO){xtream?.let{runCatching{loadMediaDetails(it,item)}.getOrNull()}?:MediaDetails(item.title,plot="Informazioni non fornite dal server")};infoLoading=false}}
   fun open(item:IptvItem){if(item.kind=="SERIE"&&item.seriesId!=null&&xtream!=null){loading=true;status="Caricamento episodi…";error="";scope.launch{try{previousSeriesList=catalog;catalog=withContext(Dispatchers.IO){loadEpisodes(xtream!!,item)};seriesTitle=item.title;category=null}catch(e:Exception){error=e.message?:"Episodi non disponibili"}finally{loading=false;status=""}}}else current=item}
 
-  LaunchedEffect(Unit){delay(2200);splash=false;if(profiles.isNotEmpty())profileSelection=true}
+  LaunchedEffect(Unit){delay(2200);splash=false;when{profiles.size==1->preloadProfile(profiles.first());profiles.size>1->profileSelection=true}}
   if(splash){SplashScreen();return}
   if(profileSelection){ProfileSelector(profiles,{profile->preloadProfile(profile)},{profile->val updated=profiles.map{if(it.url==profile.url)it.copy(avatar=(it.avatar+1)%12)else it};profiles=updated;prefs.edit().putString("profiles",writeProfiles(updated)).apply()},{profileSelection=false;settings=true});return}
   if(setupSelection){CategorySetupScreen(categoryMap,hiddenGroups,{key->hiddenGroups=if(hiddenGroups.contains(key))hiddenGroups-key else hiddenGroups+key;prefs.edit().putStringSet("hidden_groups",hiddenGroups).apply()},{pendingProfile?.let{preloadProfile(it)}});return}
