@@ -18,7 +18,7 @@ fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, St
         if (xml.isNotEmpty()) break
     }
     return if (xml.isNotEmpty()) {
-        xml + loadCurrentPrograms(x, channels.filterNot { xml.containsKey(it.id) }.take(20))
+        xml + loadCurrentPrograms(x, channels.filterNot { xml.containsKey(it.id) })
     } else loadCurrentPrograms(x, channels)
 }
 
@@ -43,12 +43,14 @@ private fun discoverEpgUrl(x: Xtream): String? {
 private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: String): Map<String, String> {
     val wanted = buildMap {
         channels.forEach { channel ->
-            put(channel.streamId, channel)
-            if (channel.epgId.isNotBlank()) put(channel.epgId, channel)
+            epgIdAliases(channel.streamId).forEach { put(it, channel) }
+            epgIdAliases(channel.epgId).forEach { put(it, channel) }
         }
     }
     val result = linkedMapOf<String, String>()
-    val byName = channels.associateBy { normalizeChannelName(it.title) }
+    val byName = buildMap {
+        channels.forEach { channel -> channelNameAliases(channel.title).forEach { putIfAbsent(it, channel) } }
+    }
     val xmlChannels = linkedMapOf<String, IptvItem>()
     val connection = URL(address).openConnection() as HttpURLConnection
     connection.connectTimeout = 20_000
@@ -67,17 +69,18 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     while (event != XmlPullParser.END_DOCUMENT && result.size < wanted.size) {
         if (event == XmlPullParser.START_TAG && parser.name == "channel") {
             val xmlId = parser.getAttributeValue(null, "id").orEmpty()
-            var displayName = ""
+            val displayNames = mutableListOf<String>()
             var inner = parser.next()
             while (!(inner == XmlPullParser.END_TAG && parser.name == "channel")) {
-                if (inner == XmlPullParser.START_TAG && parser.name == "display-name" && displayName.isBlank()) displayName = parser.nextText()
+                if (inner == XmlPullParser.START_TAG && parser.name == "display-name") displayNames += parser.nextText()
                 inner = parser.next()
             }
-            val matched = wanted[xmlId] ?: byName[normalizeChannelName(displayName)]
+            val matched = findByEpgId(wanted, xmlId)
+                ?: displayNames.asSequence().flatMap { channelNameAliases(it).asSequence() }.mapNotNull { byName[it] }.firstOrNull()
             if (matched != null) xmlChannels[xmlId] = matched
         } else if (event == XmlPullParser.START_TAG && parser.name == "programme") {
             val xmlId = parser.getAttributeValue(null, "channel")
-            val item = wanted[xmlId] ?: xmlChannels[xmlId]
+            val item = findByEpgId(wanted, xmlId) ?: xmlChannels[xmlId]
             val start = parseXmlTvTime(parser.getAttributeValue(null, "start"))
             val stop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
             if (item != null && now in start..stop) {
@@ -98,8 +101,29 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
 }
 
 private fun normalizeChannelName(value: String): String = value.lowercase(Locale.ROOT)
-    .replace(Regex("\\b(full\\s*hd|fhd|uhd|4k|hd|sd|hevc|h265|raw)\\b"), "")
+    .replace(Regex("\\b(full\\s*hd|fhd|uhd|4k|hd|sd|hevc|h265|h264|raw|backup|vip)\\b"), "")
     .replace(Regex("[^a-z0-9]"), "")
+
+private fun channelNameAliases(value: String): Set<String> {
+    val clean = value.lowercase(Locale.ROOT)
+        .replace(Regex("^[^a-z0-9]+"), "")
+        .replace(Regex("\\b(it|ita|italy|italia|sat|dtt|dvs)\\b"), " ")
+        .replace(Regex("\\b(full\\s*hd|fhd|uhd|4k|hd|sd|hevc|h265|h264|raw|backup|vip)\\b"), " ")
+    return setOf(normalizeChannelName(value), normalizeChannelName(clean)).filter { it.length >= 2 }.toSet()
+}
+
+private fun epgIdAliases(value: String?): Set<String> {
+    val raw = value.orEmpty().trim()
+    if (raw.isBlank()) return emptySet()
+    val decoded = runCatching { Uri.decode(raw) }.getOrDefault(raw)
+    return sequenceOf(raw, decoded, raw.substringBefore('.'), decoded.substringBefore('.'))
+        .map { it.trim().lowercase(Locale.ROOT) }
+        .filter { it.isNotBlank() }
+        .toSet()
+}
+
+private fun findByEpgId(index: Map<String, IptvItem>, value: String?): IptvItem? =
+    epgIdAliases(value).firstNotNullOfOrNull { index[it] }
 
 private fun parseXmlTvTime(value: String?): Long = try {
     val clean = value?.trim().orEmpty()
