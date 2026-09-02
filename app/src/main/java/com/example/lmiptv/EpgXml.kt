@@ -62,6 +62,7 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     val second = buffered.read()
     buffered.reset()
     val source = if (connection.contentEncoding?.contains("gzip", true) == true || (first == 0x1f && second == 0x8b)) GZIPInputStream(buffered) else buffered
+    try {
     val parser = XmlPullParserFactory.newInstance().newPullParser()
     parser.setInput(source, "UTF-8")
     val now = System.currentTimeMillis()
@@ -95,9 +96,11 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
         }
         event = parser.next()
     }
-    source.close()
-    connection.disconnect()
     return result
+    } finally {
+        runCatching { source.close() }
+        connection.disconnect()
+    }
 }
 
 private fun normalizeChannelName(value: String): String = value.lowercase(Locale.ROOT)
