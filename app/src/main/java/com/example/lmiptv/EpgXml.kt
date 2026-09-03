@@ -12,12 +12,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 
-fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> {
-    var xml = runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
+fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>, onProgress: ((String, Int, Int) -> Unit)? = null): Map<String, String> {
+    var xml = runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x), onProgress) }.getOrDefault(emptyMap())
     if (xml.isEmpty()) {
         val discovered = discoverEpgUrl(x)
         if (!discovered.isNullOrBlank() && discovered != standardEpgUrl(x))
-            xml = runCatching { loadXmlTvCurrent(x, channels, discovered) }.getOrDefault(emptyMap())
+            xml = runCatching { loadXmlTvCurrent(x, channels, discovered, onProgress) }.getOrDefault(emptyMap())
     }
     return if (xml.isNotEmpty()) {
         xml + loadCurrentPrograms(x, channels.filterNot { xml.containsKey(it.id) }.take(8))
@@ -59,7 +59,7 @@ private fun discoverEpgUrl(x: Xtream): String? {
     }.getOrNull()
 }
 
-private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: String): Map<String, String> {
+private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: String, onProgress: ((String, Int, Int) -> Unit)? = null): Map<String, String> {
     val wanted = linkedMapOf<String, MutableList<IptvItem>>()
     channels.forEach { channel ->
         (epgIdAliases(channel.streamId) + epgIdAliases(channel.epgId)).forEach { alias ->
@@ -67,6 +67,8 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
         }
     }
     val result = linkedMapOf<String, String>()
+    val totalGroups = channels.map { it.group }.distinct().size.coerceAtLeast(1)
+    val completedGroups = linkedSetOf<String>()
     val byName = linkedMapOf<String, MutableList<IptvItem>>()
     channels.forEach { channel -> channelNameAliases(channel.title).forEach { alias ->
         byName.getOrPut(alias) { mutableListOf() }.add(channel)
@@ -112,7 +114,12 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
                     if (inner == XmlPullParser.START_TAG && parser.name == "title") title = parser.nextText()
                     inner = parser.next()
                 }
-                if (title.isNotBlank()) matchedItems.forEach { item -> result[item.id] = packEpg(title, start, stop) }
+                if (title.isNotBlank()) {
+                    matchedItems.forEach { item ->
+                        result[item.id] = packEpg(title, start, stop)
+                        if (completedGroups.add(item.group)) onProgress?.invoke(item.group, completedGroups.size, totalGroups)
+                    }
+                }
             }
         }
         event = parser.next()
