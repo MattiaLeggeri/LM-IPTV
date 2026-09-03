@@ -13,6 +13,18 @@ data class CatalogCache(
 )
 
 private fun cacheName(url: String) = "catalog_${url.hashCode().toUInt()}.json.gz"
+private fun epgCacheName(url: String) = "epg_${url.hashCode().toUInt()}.json.gz"
+
+fun saveEpgCache(context: Context, url: String, epg: Map<String, String>) {
+    val value = JSONObject()
+    epg.forEach { (key, text) -> value.put(key, text) }
+    GZIPOutputStream(context.openFileOutput(epgCacheName(url), Context.MODE_PRIVATE)).bufferedWriter().use { it.write(value.toString()) }
+}
+
+fun readEpgCache(context: Context, url: String): Map<String, String>? = runCatching {
+    val value = GZIPInputStream(context.openFileInput(epgCacheName(url))).bufferedReader().use { JSONObject(it.readText()) }
+    value.keys().asSequence().associateWith { value.optString(it) }
+}.getOrNull()
 
 fun saveCatalogCache(context: Context, url: String, items: List<IptvItem>, epg: Map<String, String>, categories: Map<String, List<Category>>) {
     val root = JSONObject()
@@ -45,4 +57,5 @@ fun readCatalogCache(context: Context, url: String): CatalogCache? = runCatching
 
 fun deleteCatalogCache(context: Context, url: String) {
     runCatching { context.deleteFile(cacheName(url)) }
+    runCatching { context.deleteFile(epgCacheName(url)) }
 }

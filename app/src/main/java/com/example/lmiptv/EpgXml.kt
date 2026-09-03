@@ -8,6 +8,8 @@ import java.net.URL
 import java.io.BufferedInputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 
 fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> {
@@ -24,8 +26,20 @@ fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, St
 
 /** Percorso rapido usato durante l'avvio: una sola sorgente XMLTV e nessuna
  * richiesta EPG per singolo canale, così la Fire TV non viene sovraccaricata. */
-fun loadFastCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> =
-    runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
+fun loadFastCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> {
+    val executor = Executors.newSingleThreadExecutor()
+    val job = executor.submit<Map<String, String>> {
+        runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
+    }
+    return try {
+        job.get(10, TimeUnit.SECONDS)
+    } catch (_: Exception) {
+        job.cancel(true)
+        emptyMap()
+    } finally {
+        executor.shutdownNow()
+    }
+}
 
 private fun standardEpgUrl(x: Xtream) = "${x.server}/xmltv.php?username=${Uri.encode(x.username)}&password=${Uri.encode(x.password)}"
 
@@ -72,9 +86,8 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     val parser = XmlPullParserFactory.newInstance().newPullParser()
     parser.setInput(source, "UTF-8")
     val now = System.currentTimeMillis()
-    val deadline = System.nanoTime() + 8_000_000_000L
     var event = parser.eventType
-    while (event != XmlPullParser.END_DOCUMENT && result.size < channels.size && System.nanoTime() < deadline) {
+    while (event != XmlPullParser.END_DOCUMENT && result.size < channels.size && !Thread.currentThread().isInterrupted) {
         if (event == XmlPullParser.START_TAG && parser.name == "channel") {
             val xmlId = parser.getAttributeValue(null, "id").orEmpty()
             val displayNames = mutableListOf<String>()
@@ -115,7 +128,7 @@ private fun normalizeChannelName(value: String): String = value.lowercase(Locale
     .replace(Regex("\\b(full\\s*hd|fhd|uhd|4k|hd|sd|hevc|h265|h264|raw|backup|vip)\\b"), "")
     .replace(Regex("[^a-z0-9]"), "")
 
-private fun channelNameAliases(value: String): Set<String> {
+internal fun channelNameAliases(value: String): Set<String> {
     val clean = value.lowercase(Locale.ROOT)
         .replace(Regex("^[^a-z0-9]+"), "")
         .replace(Regex("\\b(it|ita|italy|italia|sat|dtt|dvs)\\b"), " ")
