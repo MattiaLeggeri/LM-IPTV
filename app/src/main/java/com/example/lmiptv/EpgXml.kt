@@ -70,6 +70,11 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     val result = linkedMapOf<String, String>()
     val totalGroups = channels.map { it.group }.distinct().size.coerceAtLeast(1)
     val completedGroups = linkedSetOf<String>()
+    fun finishProgress() {
+        channels.map { it.group }.distinct().forEach { group ->
+            if (completedGroups.add(group)) onProgress?.invoke(group, completedGroups.size, totalGroups)
+        }
+    }
     val byName = linkedMapOf<String, MutableList<IptvItem>>()
     channels.forEach { channel -> channelNameAliases(channel.title).forEach { alias ->
         byName.getOrPut(alias) { mutableListOf() }.add(channel)
@@ -77,7 +82,7 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     val xmlChannels = linkedMapOf<String, List<IptvItem>>()
     val connection = URL(address).openConnection() as HttpURLConnection
     connection.connectTimeout = 5_000
-    connection.readTimeout = 8_000
+    connection.readTimeout = 20_000
     connection.setRequestProperty("User-Agent", "LMIPTV-FireTV/2.4")
     connection.setRequestProperty("Accept-Encoding", "gzip")
     val buffered = BufferedInputStream(connection.inputStream).apply { mark(4) }
@@ -132,7 +137,11 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
         }
         event = parser.next()
     }
+    finishProgress()
     return result
+    } catch (_: Exception) {
+        finishProgress()
+        return result
     } finally {
         runCatching { source.close() }
         connection.disconnect()

@@ -115,8 +115,8 @@ class MainActivity:ComponentActivity(){
     KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER->{armPlayerControls();revealPlayerInfo?.invoke();return super.dispatchKeyEvent(event)}
     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,KeyEvent.KEYCODE_SPACE->{if(player!!.isPlaying)player!!.pause()else player!!.play();return true}
     KeyEvent.KEYCODE_MEDIA_PLAY->{player!!.play();return true};KeyEvent.KEYCODE_MEDIA_PAUSE->{player!!.pause();return true}
-    KeyEvent.KEYCODE_DPAD_RIGHT->{if(live){if(event.repeatCount==0)changeChannel?.invoke(1);return true};return if(playerControlsVisible)super.dispatchKeyEvent(event)else true}
-    KeyEvent.KEYCODE_DPAD_LEFT->{if(live){if(event.repeatCount==0)changeChannel?.invoke(-1);return true};return if(playerControlsVisible)super.dispatchKeyEvent(event)else true}
+    KeyEvent.KEYCODE_DPAD_RIGHT->{if(live){if(event.repeatCount==0)changeChannel?.invoke(1);return true};if(playerControlsVisible)return super.dispatchKeyEvent(event);val time=android.os.SystemClock.uptimeMillis();if(event.repeatCount==0||time-lastHeldSeek>=220){player!!.seekTo(player!!.currentPosition+(if(event.repeatCount==0)10_000 else 5_000));lastHeldSeek=time};return true}
+    KeyEvent.KEYCODE_DPAD_LEFT->{if(live){if(event.repeatCount==0)changeChannel?.invoke(-1);return true};if(playerControlsVisible)return super.dispatchKeyEvent(event);val time=android.os.SystemClock.uptimeMillis();if(event.repeatCount==0||time-lastHeldSeek>=220){player!!.seekTo((player!!.currentPosition-(if(event.repeatCount==0)10_000 else 5_000)).coerceAtLeast(0));lastHeldSeek=time};return true}
     KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN->{return if(playerControlsVisible)super.dispatchKeyEvent(event)else true}
     KeyEvent.KEYCODE_MEDIA_FAST_FORWARD->{player!!.seekTo(player!!.currentPosition+30_000);return true};KeyEvent.KEYCODE_MEDIA_REWIND->{player!!.seekTo((player!!.currentPosition-10_000).coerceAtLeast(0));return true}
   }};return super.dispatchKeyEvent(event)}
