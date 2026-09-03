@@ -8,6 +8,7 @@ import java.net.URL
 import java.io.BufferedInputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
@@ -105,19 +106,26 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
         } else if (event == XmlPullParser.START_TAG && parser.name == "programme") {
             val xmlId = parser.getAttributeValue(null, "channel")
             val matchedItems = (findAllByEpgId(wanted, xmlId) + xmlChannels[xmlId].orEmpty()).distinctBy { it.id }
+            matchedItems.map { it.group }.distinct().forEach { group ->
+                if (completedGroups.add(group)) onProgress?.invoke(group, completedGroups.size, totalGroups)
+            }
             val start = parseXmlTvTime(parser.getAttributeValue(null, "start"))
             val stop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
             if (matchedItems.isNotEmpty() && now in start..stop) {
                 var title = ""
+                var description = ""
                 var inner = parser.next()
                 while (!(inner == XmlPullParser.END_TAG && parser.name == "programme")) {
                     if (inner == XmlPullParser.START_TAG && parser.name == "title") title = parser.nextText()
+                    else if (inner == XmlPullParser.START_TAG && (parser.name == "desc" || parser.name == "sub-title")) {
+                        val detail = parser.nextText().trim()
+                        if (detail.isNotBlank()) description = listOf(description, detail).filter { it.isNotBlank() }.distinct().joinToString(" • ")
+                    }
                     inner = parser.next()
                 }
                 if (title.isNotBlank()) {
                     matchedItems.forEach { item ->
-                        result[item.id] = packEpg(title, start, stop)
-                        if (completedGroups.add(item.group)) onProgress?.invoke(item.group, completedGroups.size, totalGroups)
+                        result[item.id] = packEpg(title, start, stop, description)
                     }
                 }
             }
@@ -158,14 +166,24 @@ private fun findAllByEpgId(index: Map<String, List<IptvItem>>, value: String?): 
 
 private fun parseXmlTvTime(value: String?): Long = try {
     val clean = value?.trim().orEmpty()
-    SimpleDateFormat(if (clean.contains(' ')) "yyyyMMddHHmmss Z" else "yyyyMMddHHmmss", Locale.US).parse(clean)?.time ?: 0
+    SimpleDateFormat(if (clean.contains(' ')) "yyyyMMddHHmmss Z" else "yyyyMMddHHmmss", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("Europe/Rome")
+    }.parse(clean)?.time ?: 0
 } catch (_: Exception) { 0 }
 
-fun packEpg(title: String, startMillis: Long = 0, stopMillis: Long = 0): String {
+fun packEpg(title: String, startMillis: Long = 0, stopMillis: Long = 0, description: String = ""): String {
     if (startMillis <= 0 || stopMillis <= 0) return title
-    val formatter = SimpleDateFormat("HH:mm", Locale.ITALY)
-    return "$title\u001F${formatter.format(startMillis)} - ${formatter.format(stopMillis)}"
+    val formatter = SimpleDateFormat("HH:mm", Locale.ITALY).apply { timeZone = TimeZone.getTimeZone("Europe/Rome") }
+    return listOf(title, "${formatter.format(startMillis)} - ${formatter.format(stopMillis)}", description, startMillis.toString(), stopMillis.toString()).joinToString("\u001F")
 }
 
 fun epgTitle(value: String?): String? = value?.substringBefore('\u001F')?.takeIf { it.isNotBlank() }
-fun epgTime(value: String?): String? = value?.substringAfter('\u001F', "")?.takeIf { it.isNotBlank() }
+fun epgTime(value: String?): String? = value?.split('\u001F')?.getOrNull(1)?.takeIf { it.isNotBlank() }
+fun epgDescription(value: String?): String? = value?.split('\u001F')?.getOrNull(2)?.takeIf { it.isNotBlank() }
+fun epgProgress(value: String?): Float? {
+    val parts = value?.split('\u001F') ?: return null
+    val start = parts.getOrNull(3)?.toLongOrNull() ?: return null
+    val stop = parts.getOrNull(4)?.toLongOrNull() ?: return null
+    if (stop <= start) return null
+    return ((System.currentTimeMillis() - start).toFloat() / (stop - start).toFloat()).coerceIn(0f, 1f)
+}
