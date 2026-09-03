@@ -11,16 +11,21 @@ import java.util.Locale
 import java.util.zip.GZIPInputStream
 
 fun loadBestCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> {
-    val sources = listOfNotNull(discoverEpgUrl(x), standardEpgUrl(x)).distinct()
-    var xml = emptyMap<String, String>()
-    for (source in sources) {
-        xml = runCatching { loadXmlTvCurrent(x, channels, source) }.getOrDefault(emptyMap())
-        if (xml.isNotEmpty()) break
+    var xml = runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
+    if (xml.isEmpty()) {
+        val discovered = discoverEpgUrl(x)
+        if (!discovered.isNullOrBlank() && discovered != standardEpgUrl(x))
+            xml = runCatching { loadXmlTvCurrent(x, channels, discovered) }.getOrDefault(emptyMap())
     }
     return if (xml.isNotEmpty()) {
-        xml + loadCurrentPrograms(x, channels.filterNot { xml.containsKey(it.id) })
-    } else loadCurrentPrograms(x, channels)
+        xml + loadCurrentPrograms(x, channels.filterNot { xml.containsKey(it.id) }.take(8))
+    } else loadCurrentPrograms(x, channels.take(8))
 }
+
+/** Percorso rapido usato durante l'avvio: una sola sorgente XMLTV e nessuna
+ * richiesta EPG per singolo canale, così la Fire TV non viene sovraccaricata. */
+fun loadFastCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, String> =
+    runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
 
 private fun standardEpgUrl(x: Xtream) = "${x.server}/xmltv.php?username=${Uri.encode(x.username)}&password=${Uri.encode(x.password)}"
 
@@ -29,8 +34,8 @@ private fun discoverEpgUrl(x: Xtream): String? {
     return runCatching {
         val connection = URL(x.playlistUrl).openConnection() as HttpURLConnection
         connection.instanceFollowRedirects = true
-        connection.connectTimeout = 20_000
-        connection.readTimeout = 30_000
+        connection.connectTimeout = 4_000
+        connection.readTimeout = 6_000
         connection.setRequestProperty("User-Agent", "LMIPTV-FireTV/2.4")
         val firstLine = connection.inputStream.bufferedReader().use { it.readLine().orEmpty() }
         connection.disconnect()
@@ -41,20 +46,21 @@ private fun discoverEpgUrl(x: Xtream): String? {
 }
 
 private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: String): Map<String, String> {
-    val wanted = buildMap {
-        channels.forEach { channel ->
-            epgIdAliases(channel.streamId).forEach { put(it, channel) }
-            epgIdAliases(channel.epgId).forEach { put(it, channel) }
+    val wanted = linkedMapOf<String, MutableList<IptvItem>>()
+    channels.forEach { channel ->
+        (epgIdAliases(channel.streamId) + epgIdAliases(channel.epgId)).forEach { alias ->
+            wanted.getOrPut(alias) { mutableListOf() }.add(channel)
         }
     }
     val result = linkedMapOf<String, String>()
-    val byName = buildMap {
-        channels.forEach { channel -> channelNameAliases(channel.title).forEach { putIfAbsent(it, channel) } }
-    }
-    val xmlChannels = linkedMapOf<String, IptvItem>()
+    val byName = linkedMapOf<String, MutableList<IptvItem>>()
+    channels.forEach { channel -> channelNameAliases(channel.title).forEach { alias ->
+        byName.getOrPut(alias) { mutableListOf() }.add(channel)
+    } }
+    val xmlChannels = linkedMapOf<String, List<IptvItem>>()
     val connection = URL(address).openConnection() as HttpURLConnection
-    connection.connectTimeout = 20_000
-    connection.readTimeout = 120_000
+    connection.connectTimeout = 5_000
+    connection.readTimeout = 8_000
     connection.setRequestProperty("User-Agent", "LMIPTV-FireTV/2.4")
     connection.setRequestProperty("Accept-Encoding", "gzip")
     val buffered = BufferedInputStream(connection.inputStream).apply { mark(4) }
@@ -66,8 +72,9 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
     val parser = XmlPullParserFactory.newInstance().newPullParser()
     parser.setInput(source, "UTF-8")
     val now = System.currentTimeMillis()
+    val deadline = System.nanoTime() + 8_000_000_000L
     var event = parser.eventType
-    while (event != XmlPullParser.END_DOCUMENT && result.size < wanted.size) {
+    while (event != XmlPullParser.END_DOCUMENT && result.size < channels.size && System.nanoTime() < deadline) {
         if (event == XmlPullParser.START_TAG && parser.name == "channel") {
             val xmlId = parser.getAttributeValue(null, "id").orEmpty()
             val displayNames = mutableListOf<String>()
@@ -76,22 +83,23 @@ private fun loadXmlTvCurrent(x: Xtream, channels: List<IptvItem>, address: Strin
                 if (inner == XmlPullParser.START_TAG && parser.name == "display-name") displayNames += parser.nextText()
                 inner = parser.next()
             }
-            val matched = findByEpgId(wanted, xmlId)
-                ?: displayNames.asSequence().flatMap { channelNameAliases(it).asSequence() }.mapNotNull { byName[it] }.firstOrNull()
-            if (matched != null) xmlChannels[xmlId] = matched
+            val matched = (findAllByEpgId(wanted, xmlId) + displayNames.flatMap { name ->
+                channelNameAliases(name).flatMap { alias -> byName[alias].orEmpty() }
+            }).distinctBy { it.id }
+            if (matched.isNotEmpty()) xmlChannels[xmlId] = matched
         } else if (event == XmlPullParser.START_TAG && parser.name == "programme") {
             val xmlId = parser.getAttributeValue(null, "channel")
-            val item = findByEpgId(wanted, xmlId) ?: xmlChannels[xmlId]
+            val matchedItems = (findAllByEpgId(wanted, xmlId) + xmlChannels[xmlId].orEmpty()).distinctBy { it.id }
             val start = parseXmlTvTime(parser.getAttributeValue(null, "start"))
             val stop = parseXmlTvTime(parser.getAttributeValue(null, "stop"))
-            if (item != null && now in start..stop) {
+            if (matchedItems.isNotEmpty() && now in start..stop) {
                 var title = ""
                 var inner = parser.next()
                 while (!(inner == XmlPullParser.END_TAG && parser.name == "programme")) {
                     if (inner == XmlPullParser.START_TAG && parser.name == "title") title = parser.nextText()
                     inner = parser.next()
                 }
-                if (title.isNotBlank()) result[item.id] = packEpg(title, start, stop)
+                if (title.isNotBlank()) matchedItems.forEach { item -> result[item.id] = packEpg(title, start, stop) }
             }
         }
         event = parser.next()
@@ -125,8 +133,8 @@ private fun epgIdAliases(value: String?): Set<String> {
         .toSet()
 }
 
-private fun findByEpgId(index: Map<String, IptvItem>, value: String?): IptvItem? =
-    epgIdAliases(value).firstNotNullOfOrNull { index[it] }
+private fun findAllByEpgId(index: Map<String, List<IptvItem>>, value: String?): List<IptvItem> =
+    epgIdAliases(value).flatMap { index[it].orEmpty() }.distinctBy { it.id }
 
 private fun parseXmlTvTime(value: String?): Long = try {
     val clean = value?.trim().orEmpty()
