@@ -18,8 +18,8 @@ android {
         applicationId = "com.lmiptv.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 34
-        versionName = "3.1.3"
+        versionCode = 35
+        versionName = "3.1.4"
     }
 
     signingConfigs {
