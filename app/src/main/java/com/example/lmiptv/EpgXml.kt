@@ -186,7 +186,7 @@ fun packEpg(title: String, startMillis: Long = 0, stopMillis: Long = 0, descript
     return listOf(title, "${formatter.format(startMillis)} - ${formatter.format(stopMillis)}", description, startMillis.toString(), stopMillis.toString()).joinToString("\u001F")
 }
 
-fun epgTitle(value: String?): String? = value?.substringBefore('\u001F')?.takeIf { it.isNotBlank() }
+fun epgTitle(value: String?): String? { val current=value?.substringBefore('\u001F')?.takeIf { it.isNotBlank() } ?: return null; val next=epgNextTitle(value); val nextTime=epgNextTime(value); return if(next.isNullOrBlank()) current else "$current  •  Dopo: $next${if(nextTime.isNullOrBlank()) "" else " ($nextTime)"}" }
 fun epgTime(value: String?): String? = value?.split('\u001F')?.getOrNull(1)?.takeIf { it.isNotBlank() }
 fun epgDescription(value: String?): String? = value?.split('\u001F')?.getOrNull(2)?.takeIf { it.isNotBlank() }
 fun epgProgress(value: String?): Float? {
