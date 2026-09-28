@@ -55,7 +55,7 @@ class PhoneGroupServer(
     private fun saveGroups(params: Map<String, List<String>>): Response {
         val hidden = params["hidden"]?.filter { it.isNotBlank() } ?: emptyList()
         val order = params["order"]?.firstOrNull().orEmpty().split(',').filter { it.isNotBlank() }
-        prefs.edit().putStringSet("hidden_groups", hidden.toSet()).putString("group_order", writeStringList(order)).apply()
+        prefs.edit().putStringSet("hidden_groups", hidden.toSet()).putString("group_order", writeStringList(order)).putString("phone_groups_ready_url", pendingUrl).apply()
         saved(pendingName.ifBlank { "Playlist telefono" }, pendingUrl)
         return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", page("LM IPTV pronta", "<p>Gruppi salvati. Puoi tornare sull'app: il caricamento si avvia automaticamente.</p>"))
     }
