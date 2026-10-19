@@ -33,7 +33,7 @@ fun loadFastCurrentPrograms(x: Xtream, channels: List<IptvItem>): Map<String, St
         runCatching { loadXmlTvCurrent(x, channels, standardEpgUrl(x)) }.getOrDefault(emptyMap())
     }
     return try {
-        job.get(10, TimeUnit.SECONDS)
+        job.get(8, TimeUnit.SECONDS)
     } catch (_: Exception) {
         job.cancel(true)
         emptyMap()
